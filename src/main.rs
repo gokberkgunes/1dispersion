@@ -90,12 +90,64 @@ fn calc_dispersion (
     return k_x + u*(-dx*(alpha-0.5) + u*dt/2.0);
 }
 
-fn check_stability (dx: f64, dt: f64, u: f64, k_x: f64) {
-
-}
+// fn check_stability (dx: f64, dt: f64, u: f64, k_x: f64) {
+//
+// }
 
 fn run(args: Args) -> Result<()> {
-    //
+    let alpha: f64;
+    let dx: f64;
+    let dt: f64;
+    let k_x: f64;
+    let safety_factor = 0.8;
+
+    if args.scheme == Scheme::Central {
+        alpha = 0.5;
+        //dx = safety_factor * args.k_x/((1.0-alpha) * args.u);
+    } else {
+        alpha = 1.0;
+        // dx is not limited for backward difference, but limit it as if central
+        //dx = 2.0 * args.k_x * args.u;
+    }
+    // Trial
+    dx = 50.0;
+    dt = 0.005;
+    //dt = safety_factor * 0.25*dx.powi(2) / args.k_x;
+
+    k_x = calc_dispersion(args.k_x, alpha, args.u, dx, dt);
+
+    // number of points
+    let n = (args.length/dx).round() as usize;
+    // number of timestep
+    let num_timestep =(args.t_target/dt) as usize;
+    //let grid: Vec<f64> = (0..=n).map(|i| (i as f64)*dx).collect();
+    // injection point of the total mass
+    let injection_idx = (500.0/dx) as usize;
+
+    let mut c: Vec<f64> = (0..=n).map(|_i| 0.0).collect();
+    c[injection_idx] = args.mass / (dx * args.width * args.height);
+
+    let mut c_new: Vec<f64> = (0..=n).map(|i| (i as f64)*dx).collect();
+
+    for _ in 0..=num_timestep {
+        for j in 1..n {
+            c_new[j] = c[j] - args.u*dt*(c[j+1] - c[j-1])/(2.*dx)
+                + k_x*dt*(c[j+1]-2.0*c[j]+c[j-1])/(dx.powi(2));
+        }
+
+        // Inlet, dirichlet b.c.
+        //c_new[0] = 0.0;
+
+        // Inlet Ghost cell b.c. (central)
+        c_new[0] = c[0] - args.u*dt * (c[0] - 0.0)/dx + k_x*dt*(c[1] -2.0*c[0] + 0.0)/(dx.powi(2));
+        c_new[n] = c_new[n-1];
+
+        // Swap c_new with c. Data of c_new isn't needed anyway.
+        std::mem::swap(&mut c, &mut c_new);
+    }
+
+    println!("{:?}", c);
+
     Ok(())
 }
 
