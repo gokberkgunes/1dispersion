@@ -99,10 +99,30 @@ fn calc_dispersion (
 
 // Von Neumann Analysis.
 // If this is invalid, solution may diverge locally. We must have amplification
-// factor sigma <= 1.
-// fn check_stability (dx: f64, dt: f64, u: f64, k_x: f64) {
-//
-// }
+// factor sigma <= 1. For long waves, one must have CFL <= 2*Fourier
+fn check_stability (dx: f64, dt: f64, u: f64, k_x: f64) -> Result<String, String> {
+    let cfl_num = u * dt / dx;
+    let fourier_num = k_x * dt / dx.powi(2);
+
+    // Redundant due below checks, keep it for verbosity.
+    if cfl_num > 1.0 {
+        return Err(format!("CFL number is {cfl_num:.2} > 1."));
+    }
+
+    // Diffusion stability
+    if fourier_num > 0.5 {
+        return Err(format!("Fourier number is {fourier_num:.2} > 0.5."));
+    }
+
+    // Advection stability
+    if cfl_num.powi(2) > 2.0*fourier_num {
+        return Err(format!("CFL number is more than double the Fourier number
+                {cfl_num:.2} > 2.0 * {fourier_num:.2}"));
+    }
+
+    // Report CFL and Diffusion numbers
+    Ok(format!("CFL = {cfl_num:.2}, Diff = {fourier_num:.2}."))
+}
 
 // TODO: Avoid calculating dx and dt, take them from user or enable program
 // for suggestions only. Calculating dx and dt should not be a task of this
@@ -132,6 +152,13 @@ fn run(args: Args) -> Result<()> {
     // oscillations.
     //dt = safety_factor * 0.25*dx.powi(2) / args.k_x;
 
+    match check_stability(dx, dt, args.u, args.k_x) {
+        Ok(ok) => println!("{ok}"),
+        Err(e) => {
+            eprintln!("ERROR: {e}");
+            std::process::exit(1);
+        }
+    }
     k_x = calc_dispersion(args.k_x, alpha, args.u, dx, dt);
 
     // number of points
