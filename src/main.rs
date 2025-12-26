@@ -72,6 +72,13 @@ struct Args {
         default_value_t = 2400.
     )]
     u: f64,
+    /// Spill Location
+    #[arg(
+        short('p'),
+        long,
+        default_value_t = 500.
+    )]
+    spill_location: f64,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -90,10 +97,16 @@ fn calc_dispersion (
     return k_x + u*(-dx*(alpha-0.5) + u*dt/2.0);
 }
 
+// Von Neumann Analysis.
+// If this is invalid, solution may diverge locally. We must have amplification
+// factor sigma <= 1.
 // fn check_stability (dx: f64, dt: f64, u: f64, k_x: f64) {
 //
 // }
 
+// TODO: Avoid calculating dx and dt, take them from user or enable program
+// for suggestions only. Calculating dx and dt should not be a task of this
+// program at this point.
 fn run(args: Args) -> Result<()> {
     let alpha: f64;
     let dx: f64;
@@ -103,15 +116,20 @@ fn run(args: Args) -> Result<()> {
 
     if args.scheme == Scheme::Central {
         alpha = 0.5;
+        // Cell Peclet number should be less than 2. Below uses this condition.
         //dx = safety_factor * args.k_x/((1.0-alpha) * args.u);
     } else {
         alpha = 1.0;
-        // dx is not limited for backward difference, but limit it as if central
+        // For backward difference method, spatial discritization is unlimited.
+        // This is because we do not use downstream information to calculate 
+        // advection anymore, i.e., upwinding.
         //dx = 2.0 * args.k_x * args.u;
     }
-    // Trial
+    // Trial Values
     dx = 50.0;
     dt = 0.005;
+    // Diffusion number should be less than 0.5; however, we use 0.25 to avoid
+    // oscillations.
     //dt = safety_factor * 0.25*dx.powi(2) / args.k_x;
 
     k_x = calc_dispersion(args.k_x, alpha, args.u, dx, dt);
@@ -122,7 +140,7 @@ fn run(args: Args) -> Result<()> {
     let num_timestep =(args.t_target/dt) as usize;
     //let grid: Vec<f64> = (0..=n).map(|i| (i as f64)*dx).collect();
     // injection point of the total mass
-    let injection_idx = (500.0/dx) as usize;
+    let injection_idx = (args.spill_location/dx) as usize;
 
     let mut c: Vec<f64> = (0..=n).map(|_i| 0.0).collect();
     c[injection_idx] = args.mass / (dx * args.width * args.height);
