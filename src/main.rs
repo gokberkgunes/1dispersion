@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{Parser, ValueEnum};
 
 // avoid vec!, use ndarray: contiguous memory, flexible
-use ndarray::{Array}
+use ndarray::{Array};
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -100,24 +100,32 @@ fn calc_dispersion (
 // Von Neumann Analysis.
 // If this is invalid, solution may diverge locally. We must have amplification
 // factor sigma <= 1. For long waves, one must have CFL <= 2*Fourier
-fn check_stability (dx: f64, dt: f64, u: f64, k_x: f64) -> Result<String, String> {
+fn check_stability (scheme: Scheme, dx: f64, dt: f64, u: f64, k_x: f64) -> Result<String, String> {
     let cfl_num = u * dt / dx;
     let fourier_num = k_x * dt / dx.powi(2);
 
-    // Redundant due below checks, keep it for verbosity.
+    // Critical check for both FTBS, FTCS.
     if cfl_num > 1.0 {
         return Err(format!("CFL number is {cfl_num:.2} > 1."));
     }
 
-    // Diffusion stability
-    if fourier_num > 0.5 {
-        return Err(format!("Fourier number is {fourier_num:.2} > 0.5."));
+    if scheme == Scheme::Backward {
+        if cfl_num + 2.0*fourier_num < 1.0 {
+            return Err(format!("CFL number combined with double the Fourier number should be less
+                    than 1, now it is  {cfl_num:2} + 2*{fourier_num:2} > 1."));
+        }
     }
+    if scheme == Scheme::Central {
+        // Diffusion stability
+        if fourier_num > 0.5 {
+            return Err(format!("Fourier number is {fourier_num:.2} > 0.5."));
+        }
 
-    // Advection stability
-    if cfl_num.powi(2) > 2.0*fourier_num {
-        return Err(format!("CFL number is more than double the Fourier number
-                {cfl_num:.2} > 2.0 * {fourier_num:.2}"));
+        // Advection stability
+        if cfl_num.powi(2) > 2.0*fourier_num {
+            return Err(format!("CFL number is more than double the Fourier number
+                    {cfl_num:.2} > 2.0 * {fourier_num:.2}"));
+        }
     }
 
     // Report CFL and Diffusion numbers
@@ -152,7 +160,7 @@ fn run(args: Args) -> Result<()> {
     // oscillations.
     //dt = safety_factor * 0.25*dx.powi(2) / args.k_x;
 
-    match check_stability(dx, dt, args.u, args.k_x) {
+    match check_stability(args.scheme, dx, dt, args.u, args.k_x) {
         Ok(ok) => println!("{ok}"),
         Err(e) => {
             eprintln!("ERROR: {e}");
