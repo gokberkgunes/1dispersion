@@ -188,10 +188,9 @@ fn run(args: Args) -> Result<()> {
         }
 
         // Inlet, dirichlet b.c.
-        //c_new[0] = 0.0;
+        c_new[0] = 0.0;
 
-        // Inlet Ghost cell b.c. (central)
-        c_new[0] = c[0] - args.u*dt * (c[0] - 0.0)/dx + k_x*dt*(c[1] -2.0*c[0] + 0.0)/(dx.powi(2));
+        // Outlet, 1st order Neumann, dc/dx = 0.
         c_new[num_grid_pts-1] = c_new[num_grid_pts-2];
 
         // Swap c_new with c. Data of c_new isn't needed anyway.
