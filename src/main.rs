@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
 
-// avoid vec!, use ndarray.
-// use ndarray::{Array1, Array2, Axis};
+// avoid vec!, use ndarray: contiguous memory, flexible
+use ndarray::{Array}
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -162,20 +162,19 @@ fn run(args: Args) -> Result<()> {
     k_x = calc_dispersion(args.k_x, alpha, args.u, dx, dt);
 
     // number of points
-    let n = (args.length/dx).round() as usize;
+    let num_grid_pts = (args.length/dx).round() as usize;
     // number of timestep
     let num_timestep =(args.t_target/dt) as usize;
-    //let grid: Vec<f64> = (0..=n).map(|i| (i as f64)*dx).collect();
+    let grid = Array::range(0.0, args.length+dx, dx);
     // injection point of the total mass
     let injection_idx = (args.spill_location/dx) as usize;
 
-    let mut c: Vec<f64> = (0..=n).map(|_i| 0.0).collect();
+    let mut c = Array::zeros(num_grid_pts);
+    let mut c_new = Array::zeros(num_grid_pts);
     c[injection_idx] = args.mass / (dx * args.width * args.height);
 
-    let mut c_new: Vec<f64> = (0..=n).map(|i| (i as f64)*dx).collect();
-
     for _ in 0..=num_timestep {
-        for j in 1..n {
+        for j in 1..num_grid_pts-1 {
             c_new[j] = c[j] - args.u*dt*(c[j+1] - c[j-1])/(2.*dx)
                 + k_x*dt*(c[j+1]-2.0*c[j]+c[j-1])/(dx.powi(2));
         }
@@ -185,13 +184,13 @@ fn run(args: Args) -> Result<()> {
 
         // Inlet Ghost cell b.c. (central)
         c_new[0] = c[0] - args.u*dt * (c[0] - 0.0)/dx + k_x*dt*(c[1] -2.0*c[0] + 0.0)/(dx.powi(2));
-        c_new[n] = c_new[n-1];
+        c_new[num_grid_pts-1] = c_new[num_grid_pts-2];
 
         // Swap c_new with c. Data of c_new isn't needed anyway.
         std::mem::swap(&mut c, &mut c_new);
     }
 
-    println!("{:?}", c);
+    println!("{:?}\n{:?}",c_new, grid);
 
     Ok(())
 }
