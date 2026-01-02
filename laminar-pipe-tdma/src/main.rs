@@ -1,21 +1,66 @@
+use anyhow::Result;
 use clap::{Parser, ValueEnum};
 
-use ndarray::{Array};
+use ndarray::{Array, Array1};
 
-/// Solves laminar pipe flow with 1D grid usign Thomas algorithm (TDMA),
+/// Solves laminar flow between two flat plates using central differences with 1D grid with
+/// Thomas algorithm (TDMA),
 /// d^2u/dy^2 = 1/mu * dp/dx.
 #[derive(Parser)]
 #[command(author, version, about)]
 struct Args {
     #[arg(
         //required = false,
-        short = 's',
-        long = "scheme",
-        default_value_t = BoundaryCondition::Dirichlet,
+        short = 'b',
+        long = "boundary-condition-type",
+        default_value_t = BoundaryCondition::Neumann,
         value_enum,
     )]
-    scheme: BoundaryCondition,
+    boundary_condition_type: BoundaryCondition,
+    /// Number of points between the wall and middle of the pipe.
+    #[arg(
+        //required = false,
+        short = 'v',
+        long = "boundary-condition-value",
+        default_value_t = 0.0,
+    )]
+    boundary_condition_value: f64,
 
+    /// Number of points between the wall and middle of the pipe.
+    #[arg(
+        //required = false,
+        short = 'n',
+        long = "number-points",
+        default_value_t = 10,
+    )]
+    n_points: usize,
+
+    /// pressure drop gradient, dp/dx or C_p.
+    #[arg(
+        //required = false,
+        short = 'd',
+        long = "pressure-gradient",
+        default_value_t = -1.0,
+    )]
+    dpdx: f64,
+
+    /// Dynamic viscosity of the fluid.
+    #[arg(
+        //required = false,
+        short = 'm',
+        long = "viscosity",
+        default_value_t = 1e-3,
+    )]
+    mu: f64,
+
+    /// Distance between plate to centerline.
+    #[arg(
+        //required = false,
+        short = 'H',
+        long = "half-height",
+        default_value_t = 0.1,
+    )]
+    half_height: f64,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -24,29 +69,78 @@ enum BoundaryCondition {
     Dirichlet
 }
 
-const DP_DX: f64 = -1.0;
-const H: f64 = 0.1;
-const MU: f64 = 1e-3;
-const N: [usize; 4] =[10, 1000, 3000, 5000];
+/// TDMA has a Russian variation called Progorka method that envisions that
+/// solutions can be reduced to a form of u_i = E_i u_(i+1) + F_i.
+///
+/// However, TDMA is much more straightforward to understand, and reduce to
+/// the same method.
+/// This method does row-reduction starting from first row to the last row.
+/// Then do reverse sweep: find velocities from end one by one.
+/// This algorithm does not require to calculate A and B of weights matrix:
+/// A reduces to 0, B reduces to 1.
+fn tdma(bc_type: BoundaryCondition, bc_value: f64,  n: usize, dpdx: f64, h: f64, mu: f64 ) -> Result<String> {
+    let dy: f64 = h/((n-1) as f64);
+    let a = -1.;
+    let b = 2.;
+    let c = -1.;
+    let d = -dpdx*dy.powi(2)/mu;
+    let mut denominator: f64;
+    let mut c_prime = Array1::<f64>::zeros(n-1); // last c doesn't exist.
+    let mut d_prime = Array1::<f64>::zeros(n);
+    let mut u = Array1::<f64>::zeros(n);
 
-fn tdma(bc: BoundaryCondition, n: usize) -> Result<String, String> {
-    let dy: f64 = H/(n as f64);
-    let a = 1.0;
-    let b = 2.0;
-    let c = 1.0;
-    let d = -DP_DX*dy.powi(2)/MU;
-    let mut e = Array::zeros(n);
-    let mut f = Array::zeros(n);
-    let mut u = Array::zeros(n);
+    // Accept that bottom is wall, u_1 = 0.
+    c_prime[0] = 0.;
+    d_prime[0] = 0.;
 
-    if bc == BoundaryCondition::Neumann {
+    for i in 1..n-1 {
+        denominator = b - a*c_prime[i-1];
+        c_prime[i] = c/denominator;
+        d_prime[i] = (d - a*d_prime[i-1])/denominator;
     }
+    // We modify last equation according to the boundary condition.
+    // For Neumann we have (u_N - u_(N-1)) / dy = B.C.
+    if bc_type == BoundaryCondition::Neumann {
+        // Second order with ghost cell.
+        // u_(N-1) = u_(N+1). Then, [u_(N+1) - u_(N-1)]/(2dy) = B.C., where B.C. should be 0 at
+        // pipe centerline.
+        //
+        // Then, A_N * u_(N-1) + B_N u_N + C_N u_(N+1) = d can be rewritten as
+        // (A_N + C_N) u_(N-1) + B_N u_N = d - C_N * B.C. * 2 * dy
+        let a = a + c;
+        let b = b;
+        let d = d - c*bc_value*2.*dy;
+        denominator = b - a*c_prime[n-2];
+        d_prime[n-1] = (d - a*d_prime[n-2])/denominator;
+
+        // Below is first order backward.
+        // u_N - u_(N-1) = B.C.
+        // a = -1, b = 1, d = B.C. * dy
+        //d_prime[n-1] = (bc_value*dy - (-1.)*d_prime[n-2])/(1. - (-1.)*c_prime[n-2])
+    } else {
+        d_prime[n-1] = bc_value;
+    }
+
+    u[n-1] = d_prime[n-1];
+    for i in (0..n-1).rev() {
+        u[i] = d_prime[i] - c_prime[i]*u[i+1];
+    }
+
+
+    println!("{:?}", u);
+
     // Report CFL and Diffusion numbers
-    Ok(format!(""))
+    Ok(format!("Solved."))
 }
 
-fn run(args: Args) -> Result<(), String> {
-
+fn run(args: Args) -> Result<()> {
+    let n = args.n_points;
+    let bc_type = args.boundary_condition_type;
+    let bc_value = args.boundary_condition_value;
+    let dpdx = args.dpdx;
+    let h = args.half_height;
+    let mu = args.mu;
+    tdma(bc_type, bc_value, n, dpdx, h, mu)?;
     Ok(())
 }
 
