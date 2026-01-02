@@ -1,7 +1,7 @@
 use anyhow::Result;
-use clap::{Parser, ValueEnum};
+use clap::{error::ErrorKind, CommandFactory, Parser, ValueEnum};
 
-use ndarray::{Array, Array1};
+use ndarray::Array1;
 
 /// Solves laminar flow between two flat plates using central differences with 1D grid with
 /// Thomas algorithm (TDMA),
@@ -17,16 +17,15 @@ struct Args {
         value_enum,
     )]
     boundary_condition_type: BoundaryCondition,
-    /// Number of points between the wall and middle of the pipe.
+    /// Boundary condition value, should only be
     #[arg(
-        //required = false,
+        required_if_eq("boundary_condition_type", "dirichlet"),
         short = 'v',
-        long = "boundary-condition-value",
-        default_value_t = 0.0,
+        long = "boundary-value"
     )]
-    boundary_condition_value: f64,
+    boundary_value: Option<f64>,
 
-    /// Number of points between the wall and middle of the pipe.
+    /// Number of points between the wall and midpoint between walls
     #[arg(
         //required = false,
         short = 'n',
@@ -66,7 +65,7 @@ struct Args {
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum BoundaryCondition {
     Neumann,
-    Dirichlet
+    Dirichlet,
 }
 
 /// TDMA has a Russian variation called Progorka method that envisions that
@@ -78,14 +77,21 @@ enum BoundaryCondition {
 /// Then do reverse sweep: find velocities from end one by one.
 /// This algorithm does not require to calculate A and B of weights matrix:
 /// A reduces to 0, B reduces to 1.
-fn tdma(bc_type: BoundaryCondition, bc_value: f64,  n: usize, dpdx: f64, h: f64, mu: f64 ) -> Result<String> {
-    let dy: f64 = h/((n-1) as f64);
+fn tdma(
+    bc_type: BoundaryCondition,
+    bc_value: f64,
+    n: usize,
+    dpdx: f64,
+    h: f64,
+    mu: f64,
+) -> Result<String> {
+    let dy: f64 = h / ((n - 1) as f64);
     let a = -1.;
     let b = 2.;
     let c = -1.;
-    let d = -dpdx*dy.powi(2)/mu;
+    let d = -dpdx * dy.powi(2) / mu;
     let mut denominator: f64;
-    let mut c_prime = Array1::<f64>::zeros(n-1); // last c doesn't exist.
+    let mut c_prime = Array1::<f64>::zeros(n - 1); // last c doesn't exist.
     let mut d_prime = Array1::<f64>::zeros(n);
     let mut u = Array1::<f64>::zeros(n);
 
@@ -93,10 +99,10 @@ fn tdma(bc_type: BoundaryCondition, bc_value: f64,  n: usize, dpdx: f64, h: f64,
     c_prime[0] = 0.;
     d_prime[0] = 0.;
 
-    for i in 1..n-1 {
-        denominator = b - a*c_prime[i-1];
-        c_prime[i] = c/denominator;
-        d_prime[i] = (d - a*d_prime[i-1])/denominator;
+    for i in 1..n - 1 {
+        denominator = b - a * c_prime[i - 1];
+        c_prime[i] = c / denominator;
+        d_prime[i] = (d - a * d_prime[i - 1]) / denominator;
     }
     // We modify last equation according to the boundary condition.
     // For Neumann we have (u_N - u_(N-1)) / dy = B.C.
@@ -109,23 +115,22 @@ fn tdma(bc_type: BoundaryCondition, bc_value: f64,  n: usize, dpdx: f64, h: f64,
         // (A_N + C_N) u_(N-1) + B_N u_N = d - C_N * B.C. * 2 * dy
         let a = a + c;
         let b = b;
-        let d = d - c*bc_value*2.*dy;
-        denominator = b - a*c_prime[n-2];
-        d_prime[n-1] = (d - a*d_prime[n-2])/denominator;
+        let d = d - c * bc_value * 2. * dy;
+        denominator = b - a * c_prime[n - 2];
+        d_prime[n - 1] = (d - a * d_prime[n - 2]) / denominator;
 
         // Below is first order backward.
         // u_N - u_(N-1) = B.C.
         // a = -1, b = 1, d = B.C. * dy
         //d_prime[n-1] = (bc_value*dy - (-1.)*d_prime[n-2])/(1. - (-1.)*c_prime[n-2])
     } else {
-        d_prime[n-1] = bc_value;
+        d_prime[n - 1] = bc_value;
     }
 
-    u[n-1] = d_prime[n-1];
-    for i in (0..n-1).rev() {
-        u[i] = d_prime[i] - c_prime[i]*u[i+1];
+    u[n - 1] = d_prime[n - 1];
+    for i in (0..n - 1).rev() {
+        u[i] = d_prime[i] - c_prime[i] * u[i + 1];
     }
-
 
     println!("{:?}", u);
 
@@ -136,14 +141,26 @@ fn tdma(bc_type: BoundaryCondition, bc_value: f64,  n: usize, dpdx: f64, h: f64,
 fn run(args: Args) -> Result<()> {
     let n = args.n_points;
     let bc_type = args.boundary_condition_type;
-    let bc_value = args.boundary_condition_value;
     let dpdx = args.dpdx;
     let h = args.half_height;
     let mu = args.mu;
+
+    let bc_value = match args.boundary_condition_type {
+        BoundaryCondition::Dirichlet => args.boundary_value.unwrap(),
+        BoundaryCondition::Neumann => 0.0,
+    };
+    if args.boundary_condition_type == BoundaryCondition::Neumann && args.boundary_value.is_some() {
+        Args::command()
+            .error(
+                ErrorKind::ArgumentConflict,
+                "The argument '--boundary-condition-value' cannot be used with 'Neumann' type.",
+            )
+            .exit();
+    }
+
     tdma(bc_type, bc_value, n, dpdx, h, mu)?;
     Ok(())
 }
-
 
 fn main() {
     let args = Args::parse();
