@@ -68,16 +68,7 @@ enum BoundaryCondition {
     Dirichlet,
 }
 
-/// TDMA has a Russian variation called Progorka method that envisions that
-/// solutions can be reduced to a form of u_i = E_i u_(i+1) + F_i.
-///
-/// However, TDMA is much more straightforward to understand, and reduce to
-/// the same method.
-/// This method does row-reduction starting from first row to the last row.
-/// Then do reverse sweep: find velocities from end one by one.
-/// This algorithm does not require to calculate A and B of weights matrix:
-/// A reduces to 0, B reduces to 1.
-fn tdma(
+fn tdma_prepare_flat_plate(
     bc_type: BoundaryCondition,
     bc_value: f64,
     n: usize,
@@ -86,24 +77,21 @@ fn tdma(
     mu: f64,
 ) -> Result<String> {
     let dy: f64 = h / ((n - 1) as f64);
-    let a = -1.;
-    let b = 2.;
-    let c = -1.;
-    let d = -dpdx * dy.powi(2) / mu;
-    let mut denominator: f64;
-    let mut c_prime = Array1::<f64>::zeros(n - 1); // last c doesn't exist.
-    let mut d_prime = Array1::<f64>::zeros(n);
-    let mut u = Array1::<f64>::zeros(n);
+    let a_weight = -1.;
+    let b_weight = 2.;
+    let c_weight = -1.;
+    let d_weight = -dpdx * dy.powi(2) / mu;
+    let mut a = Array1::<f64>::from_elem(n, a_weight); // first a doesn't exist.
+    let mut b = Array1::<f64>::from_elem(n, b_weight);
+    let mut c = Array1::<f64>::from_elem(n, c_weight); // last c doesn't exist.
+    let mut d = Array1::<f64>::from_elem(n, d_weight);
 
+    // Boundary condition for wall
     // Accept that bottom is wall, u_1 = 0.
-    c_prime[0] = 0.;
-    d_prime[0] = 0.;
+    b[0] = 1.;
+    c[0] = 0.;
+    d[0] = 0.;
 
-    for i in 1..n - 1 {
-        denominator = b - a * c_prime[i - 1];
-        c_prime[i] = c / denominator;
-        d_prime[i] = (d - a * d_prime[i - 1]) / denominator;
-    }
     // We modify last equation according to the boundary condition.
     // For Neumann we have (u_N - u_(N-1)) / dy = B.C.
     if bc_type == BoundaryCondition::Neumann {
@@ -113,29 +101,65 @@ fn tdma(
         //
         // Then, A_N * u_(N-1) + B_N u_N + C_N u_(N+1) = d can be rewritten as
         // (A_N + C_N) u_(N-1) + B_N u_N = d - C_N * B.C. * 2 * dy
-        let a = a + c;
-        let b = b;
-        let d = d - c * bc_value * 2. * dy;
-        denominator = b - a * c_prime[n - 2];
-        d_prime[n - 1] = (d - a * d_prime[n - 2]) / denominator;
+        a[n-1] = a_weight + c_weight;
+        b[n-1] = b_weight;
+        d[n-1] = d_weight - c_weight * bc_value * 2. * dy;
 
         // Below is first order backward.
         // u_N - u_(N-1) = B.C.
         // a = -1, b = 1, d = B.C. * dy
         //d_prime[n-1] = (bc_value*dy - (-1.)*d_prime[n-2])/(1. - (-1.)*c_prime[n-2])
     } else {
-        d_prime[n - 1] = bc_value;
+        d[n-1] = bc_value;
     }
 
-    u[n - 1] = d_prime[n - 1];
-    for i in (0..n - 1).rev() {
-        u[i] = d_prime[i] - c_prime[i] * u[i + 1];
-    }
-
+    let u = tdma(&a, &b, &c, &d);
     println!("{:?}", u);
 
     // Report CFL and Diffusion numbers
     Ok(format!("Solved."))
+}
+
+/// TDMA has a Russian variation called Progorka method that envisions that
+/// solutions can be reduced to a form of u_i = E_i u_(i+1) + F_i.
+///
+/// However, TDMA is much more straightforward to understand, and reduce to
+/// the same method.
+/// This method does row-reduction starting from first row to the last row.
+/// Then do reverse sweep: find velocities from end one by one.
+/// This algorithm does not require to calculate A and B of weights matrix:
+/// A reduces to 0, B reduces to 1.
+// Solves: A[i]*x[i-1] + B[i]*x[i] + C[i]*x[i+1] = D[i]
+fn tdma(
+    a: &Array1<f64>,
+    b: &Array1<f64>,
+    c: &Array1<f64>,
+    d: &Array1<f64>
+) -> Array1<f64>
+{
+    let n = a.len();
+    let mut x = Array1::<f64>::zeros(n);
+    let mut c_prime = Array1::<f64>::zeros(n);
+    let mut d_prime = Array1::<f64>::zeros(n);
+    let mut inv_denom;
+
+    // a[0] doesn't exist for first row.
+    // Normalize c[0] and d[0]. b[0] reduces to 1 anyway.
+    c_prime[0] = c[0]/b[0];
+    d_prime[0] = d[0]/b[0];
+
+    for i in 1..n {
+        inv_denom = 1./(b[i] - a[i] * c_prime[i-1]);
+        c_prime[i] = c[i] * inv_denom; // c[n-1] is unneeded
+        d_prime[i] = (d[i] - a[i] * d_prime[i-1]) * inv_denom;
+    }
+
+    x[n-1] = d_prime[n-1];
+    for i in (0..n-1).rev() {
+        x[i] = d_prime[i] - c_prime[i] * x[i+1];
+    }
+
+    return x;
 }
 
 fn run(args: Args) -> Result<()> {
@@ -158,7 +182,7 @@ fn run(args: Args) -> Result<()> {
             .exit();
     }
 
-    tdma(bc_type, bc_value, n, dpdx, h, mu)?;
+    tdma_prepare_flat_plate(bc_type, bc_value, n, dpdx, h, mu)?;
     Ok(())
 }
 
